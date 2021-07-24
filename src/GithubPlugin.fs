@@ -14,7 +14,10 @@ and QuerySuggestion =
     | SearchRepos of string
     | DefaultSuggestion
 
-type SearchResult = { title : string ; subtitle : string; action : ActionContext -> bool }
+type SearchResult =
+    { title: string
+      subtitle: string
+      action: ActionContext -> bool }
 
 type GithubPlugin() =
 
@@ -34,98 +37,148 @@ type GithubPlugin() =
         | "users" -> Some(FindUsers)
         | _ -> None
 
-    let parseQuery = function
-        | GeneralSearchFormat keywordFunc::search when search.Length > 0 -> search |> String.concat " " |> keywordFunc |> runApiSearch
-        | [SpecificSearchFormat keywordFunc; UserRepoFormat search]
-        | [UserRepoFormat search; SpecificSearchFormat keywordFunc] -> search |> keywordFunc |> runApiSearch
-        | [UserRepoFormat search] -> search |> FindRepo |> runApiSearch
-        | [UserRepoFormat (u, r); IssueFormat i] -> runApiSearch (FindIssue(u, r, i))
-        | [UserReposFormat search;] -> search |> FindUserRepos|> runApiSearch
-        | search -> search |> String.concat " "|> SearchRepos |> SuggestQuery
+    let parseQuery =
+        function
+        | GeneralSearchFormat keywordFunc :: search when search.Length > 0 ->
+            search
+            |> String.concat " "
+            |> keywordFunc
+            |> runApiSearch
+        | [ SpecificSearchFormat keywordFunc; UserRepoFormat search ]
+        | [ UserRepoFormat search; SpecificSearchFormat keywordFunc ] -> search |> keywordFunc |> runApiSearch
+        | [ UserRepoFormat search ] -> search |> FindRepo |> runApiSearch
+        | [ UserRepoFormat (u, r); IssueFormat i ] -> runApiSearch (FindIssue(u, r, i))
+        | [ UserReposFormat search ] -> search |> FindUserRepos |> runApiSearch
+        | search ->
+            search
+            |> String.concat " "
+            |> SearchRepos
+            |> SuggestQuery
 
     let mutable pluginContext = PluginInitContext()
+    let mutable setting = Setting()
 
-    let openUrl (url:string) =
-        do SharedCommands.SearchWeb.NewTabInBrowser url |> ignore
+    let openUrl (url: string) =
+        do
+            SharedCommands.SearchWeb.NewTabInBrowser url
+            |> ignore
+
         true
 
-    let changeQuery (newQuery:string) (newParam:string) =
-        pluginContext.API.ChangeQuery <| sprintf "%s %s %s" pluginContext.CurrentPluginMetadata.ActionKeyword newQuery newParam
+    let changeQuery (newQuery: string) (newParam: string) =
+        pluginContext.API.ChangeQuery
+        <| sprintf "%s %s %s" pluginContext.CurrentPluginMetadata.ActionKeyword newQuery newParam
+
         false
 
     /// ApiSearchResult -> SearchResult list
-    let presentApiSearchResult = function
-        | Repos [] | RepoIssues [] | RepoPRs [] | Users [] ->
-            [   { title    = "No results found"
-                  subtitle = "please try a different query"
-                  action   = fun _ -> false } ]
+    let presentApiSearchResult =
+        function
+        | Repos []
+        | RepoIssues []
+        | RepoPRs []
+        | Users [] ->
+            [ { title = "No results found"
+                subtitle = "please try a different query"
+                action = fun _ -> false } ]
         | Repos repos ->
             [ for r in repos ->
-                { title    = r.FullName
-                  subtitle = sprintf "(★%d | %s) %s" r.StargazersCount r.Language r.Description
-                  action   = fun ctx ->
-                                if ctx.SpecialKeyState.CtrlPressed
-                                then openUrl r.HtmlUrl
-                                else changeQuery "repo" r.FullName } ]
+                  { title = r.FullName
+                    subtitle = sprintf "(★%d | %s) %s" r.StargazersCount r.Language r.Description
+                    action =
+                        fun ctx ->
+                            setting.History.Add(
+                                { Title = r.FullName
+                                  QueryType = "repo" }
+                            )
+
+                            if ctx.SpecialKeyState.CtrlPressed then
+                                openUrl r.HtmlUrl
+                            else
+                                changeQuery "repo" r.FullName } ]
+
         | RepoIssues issues ->
             [ for i in issues ->
-                { title    = i.Title
-                  subtitle = sprintf "issue #%d | created %s by %s" i.Number (i.CreatedAt.Humanize()) i.User.Login
-                  action   = fun _ -> openUrl i.HtmlUrl } ]
+                  { title = i.Title
+                    subtitle = sprintf "issue #%d | created %s by %s" i.Number (i.CreatedAt.Humanize()) i.User.Login
+                    action = fun _ -> openUrl i.HtmlUrl } ]
         | RepoIssue issue ->
-            [   { title    = sprintf "#%d - %s" issue.Number issue.Title
-                  subtitle = sprintf "%A | created by %s | last updated %s" issue.State issue.User.Login (issue.UpdatedAt.Humanize())
-                  action   = fun _ -> openUrl issue.HtmlUrl } ]
+            [ { title = sprintf "#%d - %s" issue.Number issue.Title
+                subtitle =
+                    sprintf
+                        "%A | created by %s | last updated %s"
+                        issue.State
+                        issue.User.Login
+                        (issue.UpdatedAt.Humanize())
+                action = fun _ -> openUrl issue.HtmlUrl } ]
         | RepoPRs issues ->
             [ for i in issues ->
-                { title    = i.Title
-                  subtitle = sprintf "PR #%d | created %s by %s" i.Number (i.CreatedAt.Humanize()) i.User.Login
-                  action   = fun _ -> openUrl i.HtmlUrl } ]
+                  { title = i.Title
+                    subtitle = sprintf "PR #%d | created %s by %s" i.Number (i.CreatedAt.Humanize()) i.User.Login
+                    action = fun _ -> openUrl i.HtmlUrl } ]
         | Users users ->
             [ for u in users ->
-                { title    = u.Login
-                  subtitle = u.HtmlUrl
-                  action   = fun _ -> openUrl u.HtmlUrl } ]
+                  { title = u.Login
+                    subtitle = u.HtmlUrl
+                    action = fun _ -> openUrl u.HtmlUrl } ]
         | RepoDetails (res, issues, prs) ->
-            [   { title    = res.FullName
-                  subtitle = sprintf "(★%d | %s) %s" res.StargazersCount res.Language res.Description
-                  action   = fun _ -> openUrl res.HtmlUrl };
-                { title    = "Issues"
-                  subtitle = sprintf "%d issues open" (List.length issues)
-                  action   = fun ctx ->
-                                if ctx.SpecialKeyState.CtrlPressed
-                                then openUrl (res.HtmlUrl + "/issues")
-                                else changeQuery "issues" res.FullName };
-                { title    = "Pull Requests"
-                  subtitle = sprintf "%d pull requests open" (List.length prs)
-                  action   = fun ctx ->
-                                if ctx.SpecialKeyState.CtrlPressed
-                                then openUrl (res.HtmlUrl + "/pulls")
-                                else changeQuery "pr" res.FullName } ]
+            [ { title = res.FullName
+                subtitle = sprintf "(★%d | %s) %s" res.StargazersCount res.Language res.Description
+                action = fun _ -> openUrl res.HtmlUrl }
+              { title = "Issues"
+                subtitle = sprintf "%d issues open" (List.length issues)
+                action =
+                    fun ctx ->
+                        if ctx.SpecialKeyState.CtrlPressed then
+                            openUrl (res.HtmlUrl + "/issues")
+                        else
+                            changeQuery "issues" res.FullName }
+              { title = "Pull Requests"
+                subtitle = sprintf "%d pull requests open" (List.length prs)
+                action =
+                    fun ctx ->
+                        if ctx.SpecialKeyState.CtrlPressed then
+                            openUrl (res.HtmlUrl + "/pulls")
+                        else
+                            changeQuery "pr" res.FullName } ]
 
     /// QuerySuggestion -> SearchResult list
-    let presentSuggestion = function
+    let presentSuggestion =
+        function
         | SearchRepos search ->
-            [   { title    = "Search repositories"
-                  subtitle = sprintf "Search for repositories matching \"%s\"" search
-                  action   = fun _ -> changeQuery "repos" search };
-                { title    = "Search users"
-                  subtitle = sprintf "Search for users matching \"%s\"" search
-                  action   = fun _ -> changeQuery "users" search } ]
+            [ { title = "Search repositories"
+                subtitle = sprintf "Search for repositories matching \"%s\"" search
+                action = fun _ -> changeQuery "repos" search }
+              { title = "Search users"
+                subtitle = sprintf "Search for users matching \"%s\"" search
+                action = fun _ -> changeQuery "users" search } ]
+            @ [ for i in setting.History ->
+                    { title = i.Title
+                      subtitle = i.QueryType
+                      action = fun _ -> changeQuery i.QueryType i.Title } ]
         | DefaultSuggestion ->
-            [   { title    = "Search repositories"
-                  subtitle = "Search Github repositories with \"gh repos {repo-search-term}\""
-                  action   = fun _ -> changeQuery "repos" "" };
-                { title    = "Search users"
-                  subtitle = "Search Github users with \"gh users {user-search-term}\""
-                  action   = fun _ -> changeQuery "users" "" } ]
+            [ { title = "Search repositories"
+                subtitle = "Search Github repositories with \"gh repos {repo-search-term}\""
+                action = fun _ -> changeQuery "repos" "" }
+              { title = "Search users"
+                subtitle = "Search Github users with \"gh users {user-search-term}\""
+                action = fun _ -> changeQuery "users" "" } ]
+            @ [ for i in setting.History ->
+                    { title = i.Title
+                      subtitle = i.QueryType
+                      action = fun _ -> changeQuery i.QueryType i.Title } ]
+
+
 
     /// exn -> SearchResult list
     let presentApiSearchExn (e: exn) =
-        let defaultResult = { title = "Search failed"; subtitle = e.Message; action = fun _ -> false }
+        let defaultResult =
+            { title = "Search failed"
+              subtitle = e.Message
+              action = fun _ -> false }
+
         match e.InnerException with
-        | null ->
-            [ defaultResult ]
+        | null -> [ defaultResult ]
         | :? Octokit.RateLimitExceededException ->
             [ { defaultResult with
                     title = "Rate limit exceeded"
@@ -133,8 +186,7 @@ type GithubPlugin() =
         | :? Octokit.NotFoundException ->
             [ { defaultResult with
                     subtitle = "The repository could not be found" } ]
-        | _ ->
-            [ defaultResult ]
+        | _ -> [ defaultResult ]
 
     let tryRunApiSearch fSearch =
         async {
@@ -142,6 +194,7 @@ type GithubPlugin() =
             | Choice1Of2 result -> return presentApiSearchResult result
             | Choice2Of2 exn -> return presentApiSearchExn exn
         }
+
     member this.ProcessQuery terms =
         match parseQuery terms with
         | RunApiSearch fSearch -> tryRunApiSearch fSearch
@@ -152,19 +205,37 @@ type GithubPlugin() =
             Helpers.githubTokenFileDir <- context.CurrentPluginMetadata.PluginDirectory
 
             pluginContext <- context
+
+            setting <- context.API.LoadSettingJsonStorage<Setting>()
+
             Task.CompletedTask
 
 
-        member this.QueryAsync(query:Query, token: CancellationToken) =
-            let ghSearch = async {
-                let! results = 
-                    query.Terms
-                    |> List.ofArray
-                    |> List.skip(if query.ActionKeyword = Query.GlobalPluginWildcardSign then 0 else 1)
-                    |> this.ProcessQuery
-                
-                return results
-                       |> List.map (fun r -> Result( Title = r.title, SubTitle = r.subtitle, IcoPath = "icon.png", Action = fun x -> r.action x ))
-                       |> List<Result>
-            }
+        member this.QueryAsync(query: Query, token: CancellationToken) =
+            let ghSearch =
+                async {
+                    let! results =
+                        query.Terms
+                        |> List.ofArray
+                        |> List.skip (
+                            if query.ActionKeyword = Query.GlobalPluginWildcardSign then
+                                0
+                            else
+                                1
+                        )
+                        |> this.ProcessQuery
+
+                    return
+                        results
+                        |> List.map
+                            (fun r ->
+                                Result(
+                                    Title = r.title,
+                                    SubTitle = r.subtitle,
+                                    IcoPath = "icon.png",
+                                    Action = fun x -> r.action x
+                                ))
+                        |> List<Result>
+                }
+
             Async.StartImmediateAsTask(ghSearch, token)
